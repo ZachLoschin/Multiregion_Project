@@ -333,17 +333,129 @@ for feat_no = 1: length(feat_labels)
     % Stores a Feature each Iteration
     X_features = (horzcat(X_features, X_feat)); % (350xtrials, features)
     NaN_Matrix = (horzcat(NaN_Matrix, X_NaN));  % (350xtrials, features)
-
 end
 
-% Selects timepoints for features and neural activity PCs 
-% that correspond to areas in the feature space that have no NaNs
-Real_Features = X_features(~any(NaN_Matrix, 2), :);
+X = X_features(~any(NaN_Matrix, 2), :); 
+
+
+%% Cross Validation to Optimize # of PCs to Use.
+
+PCs_vec = 1:1:50; 
+
+% Initialize Matrix to store CV performance for each cumulative PC
+PC_PERF = [];
+
+for PC_iter = 1:length(PCs_vec)
+    PC = PCs_vec(PC_iter); 
+    R_squared = [];
+
+    
+    
+    for fold = 1:10
+        kf = cvpartition(size(X,1), 'HoldOut', 0.2);
+
+        train_idx = training(kf, 1);
+        test_idx = test(kf, 1);
+        
+        % Split X into Training and Testing Sets
+        X_train = X(train_idx, :);
+        X_test = X(test_idx, :);
+
+        % Select the first num_PCs eigenvectors
+        PCs = eig_vec(:, 1:PC);
+        
+        % Project the data onto the first num_PCs PCs
+        projected_data = D * PCs;
+        Real_Activity = projected_data(~any(NaN_Matrix, 2), :);
+        
+        Y_train = Real_Activity(train_idx, :);
+        Y_test = Real_Activity(test_idx, :);
+        
+        % Solution
+        B_OLS = (X_train' * X_train) \ (X_train' * Y_train);
+
+        % Test Prediction
+        Y_pred = X_test * B_OLS; 
+
+        % Performance (R^squared)
+        r_squared = 1 - (sum((Y_test - Y_pred).^2) / sum((Y_test - mean(Y_test)).^2));
+        R_squared = ([R_squared, r_squared]);
+    end
+    pc_perf = mean(R_squared);
+    PC_PERF = ([PC_PERF; pc_perf]);
+end
+
+%% Plot CV PERFORMANCE OF Optimal PC to use
+
+% Determine PC to use 
+[max_perf, PC_idx] = max(PC_PERF);
+
+figure();
+plot(PCs_vec', PC_PERF,'-', 'color', 'b', 'linewidth', 3);
+hold on
+xline(PCs_vec(PC_idx), '--','k')
+xlabel('Principal Component')
+ylabel('R^{2}');
+title('CV Results: Prediction Performance', 'Behavior to Varying PCs of IRN');
+legend(['PC = ' num2str(PCs_vec(PC_idx)) '; R^{2} = ' num2str(max(PC_PERF))], 'fontsize', 12)
+ylim([0.1 0.7]);
+
+%% Cross Validation to Determine Best Lambda
+
+% Project Data onto Optimal PCs
+% Select the first num_PCs eigenvectors
+PCs = eig_vec(:, 1:PCs_vec(PC_idx));
+
+% Project the data onto the first num_PCs PCs
+projected_data = D * PCs;
 Real_Activity = projected_data(~any(NaN_Matrix, 2), :);
 
+% Create Lambda Values
+lambda_values = logspace(-3,3,200);
 
-%% Go crazy with Regression now
+% Initialize Matrix to store CV performance for each Lambda Value
+RIDGE_PERF = [];
 
+for ridge_iter = 1:length(lambda_values)
+    lmbda = lambda_values(ridge_iter); 
+    R_squared = [];
 
+    
+    for fold = 1:10
+        kf = cvpartition(size(X,1), 'HoldOut', 0.2);
+        train_idx = training(kf, 1);
+        test_idx = test(kf, 1);
+        
+        % Split X into Training and Testing Sets
+        X_train = X(train_idx, :);
+        X_test = X(test_idx, :);
+        
+        Y_train = Real_Activity(train_idx, :);
+        Y_test = Real_Activity(test_idx, :);
+        
+        % Solution
+        B_Ridge = (X_train' * X_train + lmbda*eye(size(X_train,2))) \ (X_train' * Y_train);
 
+        % Test Prediction
+        Y_pred = X_test * B_Ridge; 
 
+        % Performance (R^squared)
+        r_squared = 1 - (sum((Y_test - Y_pred).^2) / sum((Y_test - mean(Y_test)).^2));
+        R_squared = ([R_squared, r_squared]);
+    end
+    ridge_perf = mean(R_squared);
+    RIDGE_PERF = ([RIDGE_PERF; ridge_perf]);
+end
+
+%% Plot CV PERFORMANCE OF Optimal Lambda to use
+
+% Determine Optimal Lambda to use 
+[max_perf, lmbda_idx] = max(RIDGE_PERF);
+
+figure();
+semilogx(lambda_values', RIDGE_PERF,'-', 'color', 'b', 'linewidth', 3);
+xlabel('\lambda')
+ylabel('R^{2}');
+title('CV Results: Prediction Performance of Different \lambda', 'Behavior to 4 PCs to IRN');
+legend(['\lambda = ' num2str(lambda_values(lmbda_idx)) '; R^{2} = ' num2str(max(RIDGE_PERF))], 'fontsize', 12)
+ylim([0.1 0.7]);
